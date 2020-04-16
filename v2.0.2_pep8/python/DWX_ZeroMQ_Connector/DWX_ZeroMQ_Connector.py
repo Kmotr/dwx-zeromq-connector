@@ -1,24 +1,23 @@
 # -*- coding: utf-8 -*-
 
 """
-    DWX_ZeroMQ_Connector_v2_0_2_RC8.py
+    DWX_ZeroMQ_Connector.py
     --
     @author: Darwinex Labs (www.darwinex.com)
-    
+
     Copyright (c) 2017-2019, Darwinex. All rights reserved.
-    
-    Licensed under the BSD 3-Clause License, you may not use this file except 
-    in compliance with the License. 
-    
-    You may obtain a copy of the License at:    
+
+    Licensed under the BSD 3-Clause License, you may not use this file except
+    in compliance with the License.
+
+    You may obtain a copy of the License at:
     https://opensource.org/licenses/BSD-3-Clause
 """
-
+import logging
 from threading import Thread
 from time import sleep
 
-# IMPORT zmq library
-# import zmq, time
+import LoggingHandler
 import zmq
 from pandas import DataFrame, Timestamp
 
@@ -72,11 +71,14 @@ class DWXZeroMQConnector:
                  sub_handlers=None,  # Handlers to process data received through SUB port.
                  _verbose=False):
 
-        # Strategy state (if this is False, ZeroMQ will not listen for data)
         if sub_handlers is None:
             sub_handlers = []
         if pull_handlers is None:
             pull_handlers = []
+
+        LoggingHandler.setup_logging()
+
+        # Strategy state (if this is False, ZeroMQ will not listen for data)
         self._ACTIVE = True
 
         # Client ID
@@ -114,14 +116,15 @@ class DWXZeroMQConnector:
 
         # Bind PUSH Socket to send commands to MetaTrader
         self._push_socket.connect(self._url + str(self._push_port))
-        print("[INIT] Ready to send commands to METATRADER (PUSH): " + str(self._push_port))
+        logging.info("[INIT] Ready to send commands to METATRADER (PUSH): " + str(self._push_port))
 
         # Connect PULL Socket to receive command responses from MetaTrader
         self._pull_socket.connect(self._url + str(self._pull_port))
-        print("[INIT] Listening for responses from METATRADER (PULL): " + str(self._pull_port))
+        logging.info("[INIT] Listening for responses from METATRADER (PULL): " + str(self._pull_port))
 
         # Connect SUB Socket to receive market data from MetaTrader
         self._sub_socket.connect(self._url + str(self._sub_port))
+        logging.info("[INIT] Listening for responses from METATRADER (SUB): " + str(self._sub_port))
 
         # Initialize POLL set and register PULL and SUB sockets
         self._poller = zmq.Poller()
@@ -139,7 +142,7 @@ class DWXZeroMQConnector:
         self._MarketData_Thread.start()
 
         # Market Data Dictionary by Symbol (holds tick data) or Instrument (holds OHLC data)
-        self._Market_Data_DB = {}  # {SYMBOL: {TIMESTAMP: (BID, ASK)}}
+        self.Market_Data = {}  # {SYMBOL: {TIMESTAMP: (BID, ASK)}}
         # {SYMBOL: {TIMESTAMP: (TIME, OPEN, HIGH, LOW, CLOSE, TICKVOL, SPREAD, VOLUME)}}
 
         # Temporary Order STRUCT for convenience wrappers later.
@@ -160,7 +163,8 @@ class DWXZeroMQConnector:
     def set_state(self, new_state=False):
 
         self._ACTIVE = new_state
-        print("\n**\n[KERNEL] Setting state to {} - Deactivating Threads.. please wait a bit.\n**".format(new_state))
+        logging.info(
+            "\n**\n[KERNEL] Setting state to {} - Deactivating Threads.. please wait a bit.\n**".format(new_state))
 
     ##########################################################################
 
@@ -173,29 +177,29 @@ class DWXZeroMQConnector:
         try:
             socket.send_string(data, zmq.DONTWAIT)
         except zmq.error.Again:
-            print("\nResource timeout.. please try again.")
+            logging.error("\nResource timeout.. please try again.")
             sleep(0.000000001)
 
     ##########################################################################
 
-    def _get_response_(self):
+    def get_response(self):
         return self._thread_data_output
 
     ##########################################################################
 
-    def _set_response_(self, _resp=None):
+    def set_response(self, _resp=None):
         self._thread_data_output = _resp
 
     ##########################################################################
 
-    def _valid_response_(self, input_='zmq'):
+    def valid_response(self, input_='zmq'):
 
         # Valid data types
         _types = (dict, DataFrame)
 
         # If _input = 'zmq', assume self._zmq._thread_data_output
         if isinstance(input_, str) and input_ == 'zmq':
-            return isinstance(self._get_response_(), _types)
+            return isinstance(self.get_response(), _types)
         else:
             return isinstance(input_, _types)
 
@@ -211,7 +215,7 @@ class DWXZeroMQConnector:
             msg = socket.recv_string(zmq.DONTWAIT)
             return msg
         except zmq.error.Again:
-            print("\nResource timeout.. please try again.")
+            logging.error("\nResource timeout.. please try again.")
             sleep(0.000001)
 
         return None
@@ -242,7 +246,7 @@ class DWXZeroMQConnector:
             self.send_command(**self.temp_order_dict)
 
         except KeyError:
-            print("[ERROR] Order Ticket {} not found!".format(ticket))
+            logging.error("Order Ticket {} not found!".format(ticket))
 
     # CLOSE ORDER
     def close_trade_by_ticket(self, ticket):
@@ -255,7 +259,7 @@ class DWXZeroMQConnector:
             self.send_command(**self.temp_order_dict)
 
         except KeyError:
-            print("[ERROR] Order Ticket {} not found!".format(ticket))
+            logging.error("Order Ticket {} not found!".format(ticket))
 
     # CLOSE PARTIAL
     def close_partial_by_ticket(self, ticket, lot_size):
@@ -269,44 +273,32 @@ class DWXZeroMQConnector:
             self.send_command(**self.temp_order_dict)
 
         except KeyError:
-            print("[ERROR] Order Ticket {} not found!".format(ticket))
+            logging.error("Order Ticket {} not found!".format(ticket))
 
     # CLOSE MAGIC
     def close_trades_by_magic(self, magic):
 
-        try:
-            self.temp_order_dict['action'] = 'CLOSE_MAGIC'
-            self.temp_order_dict['magic'] = magic
+        self.temp_order_dict['action'] = 'CLOSE_MAGIC'
+        self.temp_order_dict['magic'] = magic
 
-            # Execute
-            self.send_command(**self.temp_order_dict)
-
-        except KeyError:
-            pass
+        # Execute
+        self.send_command(**self.temp_order_dict)
 
     # CLOSE ALL TRADES
     def close_all_trades(self):
 
-        try:
-            self.temp_order_dict['action'] = 'CLOSE_ALL'
+        self.temp_order_dict['action'] = 'CLOSE_ALL'
 
-            # Execute
-            self.send_command(**self.temp_order_dict)
-
-        except KeyError:
-            pass
+        # Execute
+        self.send_command(**self.temp_order_dict)
 
     # GET OPEN TRADES
     def get_open_trades(self):
 
-        try:
-            self.temp_order_dict['action'] = 'GET_OPEN_TRADES'
+        self.temp_order_dict['action'] = 'GET_OPEN_TRADES'
 
-            # Execute
-            self.send_command(**self.temp_order_dict)
-
-        except KeyError:
-            pass
+        # Execute
+        self.send_command(**self.temp_order_dict)
 
     ##########################################################################
     """
@@ -385,12 +377,12 @@ class DWXZeroMQConnector:
     Function to construct messages for sending Trade commands to MetaTrader
     """
 
-    def send_command(self, action='OPEN', type=0,
+    def send_command(self, action='OPEN', type_=0,
                      symbol='EURUSD', price=0.0,
                      stop_loss=50, take_profit=50, comment="Python-to-MT",
                      lot_size=0.01, magic=123456, ticket=0):
 
-        _msg = "{};{};{};{};{};{};{};{};{};{};{}".format('TRADE', action, type,
+        _msg = "{};{};{};{};{};{};{};{};{};{};{}".format('TRADE', action, type_,
                                                          symbol, price,
                                                          stop_loss, take_profit, comment,
                                                          lot_size, magic,
@@ -403,20 +395,20 @@ class DWXZeroMQConnector:
          compArray[0] = TRADE or DATA
          compArray[1] = ACTION (e.g. OPEN, MODIFY, CLOSE)
          compArray[2] = TYPE (e.g. OP_BUY, OP_SELL, etc - only used when ACTION=OPEN)
-         
+
          For compArray[0] == DATA, format is: 
              DATA|SYMBOL|TIMEFRAME|START_DATETIME|END_DATETIME
-         
+
          // ORDER TYPES: 
          // https://docs.mql4.com/constants/tradingconstants/orderproperties
-         
+
          // OP_BUY = 0
          // OP_SELL = 1
          // OP_BUYLIMIT = 2
          // OP_SELLLIMIT = 3
          // OP_BUYSTOP = 4
          // OP_SELLSTOP = 5
-         
+
          compArray[3] = Symbol (e.g. EURUSD, etc.)
          compArray[4] = Open/Close Price (ignored if ACTION = MODIFY)
          compArray[5] = SL
@@ -456,7 +448,7 @@ class DWXZeroMQConnector:
 
                             self._thread_data_output = _data
                             if self._verbose:
-                                print(_data)  # default logic
+                                logging.debug(_data)  # default logic
                             # invokes data handlers on pull port
                             for hnd in self._pull_handlers:
                                 hnd.onPullData(_data)
@@ -464,14 +456,18 @@ class DWXZeroMQConnector:
                         except Exception as ex:
                             _exstr = "Exception Type {0}. Args:\n{1!r}"
                             _msg = _exstr.format(type(ex).__name__, ex.args)
-                            print(_msg)
+                            logging.error(_msg)
 
                 except zmq.error.Again:
-                    pass  # resource temporarily unavailable, nothing to print
+                    logging.error('zmq.error.Again')
+                    # pass  # resource temporarily unavailable
                 except ValueError:
-                    pass  # No data returned, passing iteration.
+                    pass
+                    # logging.error('No data returned')
+                    # No data returned, passing iteration.
                 except UnboundLocalError:
-                    pass  # _symbol may sometimes get referenced before being assigned.
+                    logging.error('Symbol referenced before assignment')
+                    # _symbol may sometimes get referenced before being assigned.
 
             # Receive new market data from MetaTrader
             if self._sub_socket in sockets and sockets[self._sub_socket] == zmq.POLLIN:
@@ -485,22 +481,23 @@ class DWXZeroMQConnector:
                         if len(_data.split(string_delimiter)) == 2:
                             _bid, _ask = _data.split(string_delimiter)
                             if self._verbose:
-                                print("\n[" + _symbol + "] " + _timestamp + " (" + _bid + "/" + _ask + ") BID/ASK")
+                                logging.debug(
+                                    "\n[" + _symbol + "] " + _timestamp + " (" + _bid + "/" + _ask + ") BID/ASK")
                                 # Update Market Data DB
-                            if _symbol not in self._Market_Data_DB.keys():
-                                self._Market_Data_DB[_symbol] = {}
-                            self._Market_Data_DB[_symbol][_timestamp] = (float(_bid), float(_ask))
+                            if _symbol not in self.Market_Data.keys():
+                                self.Market_Data[_symbol] = {}
+                            self.Market_Data[_symbol][_timestamp] = (float(_bid), float(_ask))
 
                         elif len(_data.split(string_delimiter)) == 8:
                             _time, _open, _high, _low, _close, _tick_vol, _spread, _real_vol = _data.split(
                                 string_delimiter)
                             if self._verbose:
-                                print(
+                                logging.debug(
                                     "\n[" + _symbol + "] " + _timestamp + " (" + _time + "/" + _open + "/" + _high + "/" + _low + "/" + _close + "/" + _tick_vol + "/" + _spread + "/" + _real_vol + ") TIME/OPEN/HIGH/LOW/CLOSE/TICKVOL/SPREAD/VOLUME")
                                 # Update Market Rate DB
-                            if _symbol not in self._Market_Data_DB.keys():
-                                self._Market_Data_DB[_symbol] = {}
-                            self._Market_Data_DB[_symbol][_timestamp] = (
+                            if _symbol not in self.Market_Data.keys():
+                                self.Market_Data[_symbol] = {}
+                            self.Market_Data[_symbol][_timestamp] = (
                                 int(_time), float(_open), float(_high), float(_low), float(_close), int(_tick_vol),
                                 int(_spread), int(_real_vol))
                         # invokes data handlers on sub port
@@ -508,11 +505,14 @@ class DWXZeroMQConnector:
                             hnd.onSubData(msg)
 
                 except zmq.error.Again:
-                    pass  # resource temporarily unavailable, nothing to print
+                    pass
+                    # resource temporarily unavailable
                 except ValueError:
-                    pass  # No data returned, passing iteration.
+                    pass
+                    # No data returned, passing iteration.
                 except UnboundLocalError:
-                    pass  # _symbol may sometimes get referenced before being assigned.
+                    logging.error('Symbol referenced before assignment')
+                    # _symbol may sometimes get referenced before being assigned.
 
     ##########################################################################
 
@@ -529,7 +529,7 @@ class DWXZeroMQConnector:
             self._MarketData_Thread = Thread(target=self.poll_data, args=delimiter)
             self._MarketData_Thread.start()
 
-        print("[KERNEL] Subscribed to {} MARKET updates. See self._Market_Data_DB.".format(symbol))
+        logging.info("[KERNEL] Subscribed to {} MARKET updates. See Market_Data.".format(symbol))
 
     """
     Function to unsubscribe to given Symbol's BID/ASK feed from MetaTrader
@@ -538,7 +538,7 @@ class DWXZeroMQConnector:
     def unsubscribe_marketdata(self, symbol):
 
         self._sub_socket.setsockopt_string(zmq.UNSUBSCRIBE, symbol)
-        print("\n**\n[KERNEL] Unsubscribing from " + symbol + "\n**\n")
+        logging.info("\n**\n[KERNEL] Unsubscribing from " + symbol + "\n**\n")
 
     """
     Function to unsubscribe from ALL MetaTrader Symbols
